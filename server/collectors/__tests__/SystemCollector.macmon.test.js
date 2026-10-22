@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
-import { SystemCollector, MACMON_CMD, parseMacmonSample } from "../SystemCollector.js";
+import { SystemCollector, MACMON_CMD, parseMacmonSample, parseMacmonCpuPct, parseMacmonGpuPct } from "../SystemCollector.js";
 import { DARWIN_UPTIME_CMD } from "../../sparks/SparkMonitor.js";
 
 // `macmon pipe -s 1` output captured from a Mac Studio (M3 Ultra, 512 GB, macOS 27), core lists trimmed.
@@ -31,11 +31,12 @@ test("macOS GPU/CPU/RAM come from one macmon sample", async () => {
   assert.equal(calls(), 1, "one SSH round trip shared by all four collectors");
   assert.equal(gpu.vendor, "apple");
   assert.equal(gpu.gpus.length, 1);
-  assert.equal(gpu.usage, 42);
+  // Captured sample: active residency is 0%, the legacy field is scaled.
+  assert.equal(gpu.usage, 0);
   assert.equal(gpu.temperature, 36.8);
   assert.equal(gpu.power.systemDraw, 34);
   assert.equal(gpu.metricAvailability.powerLimit, false);
-  assert.equal(cpu.usage, 12);
+  assert.equal(cpu.usage, 4);
   assert.equal(cpu.temperature, 39.6);
   assert.equal(cpu.temperatureSource, "macmon");
   assert.equal(ram.total, 524288);
@@ -85,4 +86,22 @@ test("a Mac without macmon costs one SSH call a minute, not one per poll", async
   }
   assert.equal(calls(), 1);
   assert.equal(logged.filter((l) => /macmon/.test(l)).length, 1);
+});
+
+test("macmon active residency wins over v0.10 scaled aliases", () => {
+  const sample = {
+    cpu_active_ratio: 0.125,
+    cpu_usage_pct: 0.0625,
+    gpu_active_ratio: 0.25,
+    gpu_usage: [1000, 0.125],
+  };
+  assert.equal(parseMacmonCpuPct(sample), 12.5);
+  assert.equal(parseMacmonGpuPct(sample), 25);
+
+  const legacy = { cpu_usage_pct: 0.123, gpu_usage: [1398, 0.42] };
+  assert.equal(parseMacmonCpuPct(legacy), 12.3);
+  assert.equal(parseMacmonGpuPct(legacy), 42);
+
+  assert.equal(parseMacmonCpuPct({}), null);
+  assert.equal(parseMacmonGpuPct({}), null);
 });

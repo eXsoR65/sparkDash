@@ -188,6 +188,41 @@ export function parseMacmonSample(output) {
   }
 }
 
+/** Clamp a 0–1 macmon ratio to a rounded percentage. */
+function macmonRatioPct(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.max(0, Math.min(100, Math.round(n * 1000) / 10));
+}
+
+/**
+ * CPU percentage from a macmon sample. v0.10 keeps cpu_usage_pct as a
+ * compatibility alias of the frequency-scaled ratio, not active residency:
+ * prefer cpu_active_ratio when present, then the legacy field, then scaled.
+ */
+export function parseMacmonCpuPct(sample) {
+  const active = macmonRatioPct(sample?.cpu_active_ratio);
+  if (active != null) return active;
+  const legacy = sample?.cpu_usage_pct;
+  if (legacy != null) {
+    const n = Number(legacy);
+    if (Number.isFinite(n) && n >= 0) return Math.max(0, Math.min(100, Math.round(n * 1000) / 10));
+  }
+  return macmonRatioPct(sample?.cpu_scaled_ratio);
+}
+
+/**
+ * GPU percentage from a macmon sample. gpu_usage[1] is a v0.10 alias of the
+ * scaled ratio; prefer gpu_active_ratio, then the legacy tuple, then scaled.
+ */
+export function parseMacmonGpuPct(sample) {
+  const active = macmonRatioPct(sample?.gpu_active_ratio);
+  if (active != null) return active;
+  const legacy = Array.isArray(sample?.gpu_usage) ? sample.gpu_usage[1] : null;
+  return macmonRatioPct(legacy) ?? macmonRatioPct(sample?.gpu_scaled_ratio);
+}
+
 const REMOTE_GPU_SECTIONS = new Set(["NVIDIA", "NVIDIA_VRAM", "NVIDIA_APPS", "AMD", "AMD_LIMITS", "INTEL", "MEMINFO", "CLOCK_CAP"]);
 
 /**
@@ -2254,7 +2289,7 @@ export class SystemCollector {
       const j = await this._macmonSample();
       const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
       const temperature = r1(j.temp?.gpu_temp_avg);
-      const usage = Math.round((Number(j.gpu_usage?.[1]) || 0) * 100);
+      const usage = Math.round(parseMacmonGpuPct(j) ?? 0);
       const draw = r1(j.gpu_power);
       const total = Math.round((Number(j.memory?.ram_total) || 0) / 1048576);
       const used = Math.round((Number(j.memory?.ram_usage) || 0) / 1048576);
@@ -2310,7 +2345,7 @@ export class SystemCollector {
     try {
       const j = await this._macmonSample();
       return {
-        usage: Math.round((Number(j.cpu_usage_pct) || 0) * 100),
+        usage: Math.round(parseMacmonCpuPct(j) ?? 0),
         temperature: Math.round((Number(j.temp?.cpu_temp_avg) || 0) * 10) / 10,
         temperatureLabel: "CPU avg",
         temperatureSource: "macmon",
